@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const path = require('path');
 require('dotenv').config();
 
 const logger = require('./utils/logger');
@@ -33,18 +34,26 @@ app.use(morgan('combined', {
   }
 }));
 
-// Routes
+// Serve static files from React build
+app.use(express.static(path.join(__dirname, '../public')));
+
+// API Routes
 app.use('/api/health', healthRoutes);
 app.use('/api/vaults', vaultRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/settings', settingsRoutes);
 
-// 404 handler
-app.use('*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: 'Route not found'
-  });
+// Handle React Router - serve index.html for all non-API routes
+app.get('*', (req, res) => {
+  // Only serve React app for non-API routes
+  if (!req.path.startsWith('/api')) {
+    res.sendFile(path.join(__dirname, '../public/index.html'));
+  } else {
+    res.status(404).json({
+      success: false,
+      message: 'API route not found'
+    });
+  }
 });
 
 // Error handling middleware

@@ -69,12 +69,12 @@ EOF
 
 ### 3. Docker Development (Recommended)
 
-#### Build and Start Services
+#### Build and Start Application
 ```bash
-# Build all services
+# Build the unified container
 docker-compose build
 
-# Start in development mode
+# Start the application
 docker-compose up -d
 
 # View logs
@@ -82,11 +82,11 @@ docker-compose logs -f
 ```
 
 #### Access the Application
-- **Frontend**: http://localhost:3000
-- **Backend API**: http://localhost:5000
+- **Web Application**: http://localhost:5000
+- **API Endpoints**: http://localhost:5000/api/*
 - **Health Check**: http://localhost:5000/api/health
 
-#### Stop Services
+#### Stop Application
 ```bash
 docker-compose down
 ```
@@ -197,10 +197,9 @@ npm run lint     # Run ESLint
 ### Docker
 ```bash
 # Development
-docker-compose up -d              # Start all services
-docker-compose logs -f backend    # View backend logs
-docker-compose logs -f frontend   # View frontend logs
-docker-compose restart backend    # Restart backend service
+docker-compose up -d              # Start the application
+docker-compose logs -f            # View application logs
+docker-compose restart app        # Restart the application
 
 # Production
 docker-compose -f docker-compose.prod.yml up -d
