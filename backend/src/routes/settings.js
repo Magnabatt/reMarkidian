@@ -1,6 +1,7 @@
 const express = require('express');
 const { runQuery, getQuery, getAllQuery } = require('../config/database');
 const logger = require('../utils/logger');
+const RemarkableConnectionService = require('../services/remarkableConnection');
 
 const router = express.Router();
 
@@ -280,6 +281,109 @@ router.post('/:key/reset', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to reset setting'
+    });
+  }
+});
+
+// reMarkable Integration Endpoints
+
+// Connect to reMarkable with one-time code
+router.post('/remarkable/connect', async (req, res) => {
+  try {
+    const { oneTimeCode } = req.body;
+
+    if (!oneTimeCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'One-time code is required'
+      });
+    }
+
+    const connectionService = new RemarkableConnectionService();
+    const result = await connectionService.connect(oneTimeCode);
+
+    if (result.success) {
+      logger.info('reMarkable connection established via Settings API');
+      res.json(result);
+    } else {
+      res.status(400).json(result);
+    }
+  } catch (error) {
+    logger.error('Error connecting to reMarkable:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to connect to reMarkable Cloud',
+      error: error.message
+    });
+  }
+});
+
+// Get reMarkable connection status
+router.get('/remarkable/status', async (req, res) => {
+  try {
+    const connectionService = new RemarkableConnectionService();
+    const status = await connectionService.getConnectionStatus();
+
+    res.json({
+      success: true,
+      data: status
+    });
+  } catch (error) {
+    logger.error('Error getting reMarkable status:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get connection status',
+      error: error.message
+    });
+  }
+});
+
+// Test reMarkable connection
+router.post('/remarkable/test', async (req, res) => {
+  try {
+    const connectionService = new RemarkableConnectionService();
+    const testResult = await connectionService.testConnection();
+
+    if (testResult.success) {
+      res.json({
+        success: true,
+        data: testResult
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: testResult.message,
+        data: testResult
+      });
+    }
+  } catch (error) {
+    logger.error('Error testing reMarkable connection:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to test connection',
+      error: error.message
+    });
+  }
+});
+
+// Disconnect from reMarkable
+router.delete('/remarkable/disconnect', async (req, res) => {
+  try {
+    const connectionService = new RemarkableConnectionService();
+    const result = await connectionService.disconnect();
+
+    if (result.success) {
+      logger.info('reMarkable disconnected via Settings API');
+      res.json(result);
+    } else {
+      res.status(400).json(result);
+    }
+  } catch (error) {
+    logger.error('Error disconnecting from reMarkable:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to disconnect from reMarkable Cloud',
+      error: error.message
     });
   }
 });

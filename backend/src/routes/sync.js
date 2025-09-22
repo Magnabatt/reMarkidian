@@ -1,6 +1,7 @@
 const express = require('express');
 const { runQuery, getQuery, getAllQuery } = require('../config/database');
 const logger = require('../utils/logger');
+const DocumentSyncService = require('../services/documentSync');
 
 const router = express.Router();
 
@@ -129,30 +130,8 @@ router.post('/start', async (req, res) => {
       syncId: syncResult.id 
     });
 
-    // TODO: Implement actual sync logic here
-    // For now, we'll simulate a sync completion
-    setTimeout(async () => {
-      try {
-        await runQuery(`
-          UPDATE sync_history 
-          SET status = 'success', notes_synced = 0, completed_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `, [syncResult.id]);
-
-        await runQuery(`
-          UPDATE vaults 
-          SET last_sync = CURRENT_TIMESTAMP 
-          WHERE id = ?
-        `, [vault_id]);
-
-        logger.sync(`Manual sync completed for vault: ${vault.name}`, { 
-          vaultId: vault_id, 
-          syncId: syncResult.id 
-        });
-      } catch (updateError) {
-        logger.error('Error updating sync status:', updateError);
-      }
-    }, 2000);
+    // Start the actual sync process asynchronously
+    performDocumentSync(vault_id, syncResult.id, vault.name);
 
     res.json({
       success: true,
@@ -217,5 +196,118 @@ router.post('/stop/:syncId', async (req, res) => {
     });
   }
 });
+
+// Get sync statistics for a vault
+router.get('/stats/:vaultId', async (req, res) => {
+  try {
+    const { vaultId } = req.params;
+
+    const syncService = new DocumentSyncService();
+    const stats = await syncService.getSyncStats(vaultId);
+
+    res.json({
+      success: true,
+      data: stats
+    });
+  } catch (error) {
+    logger.error('Error fetching sync stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch sync statistics'
+    });
+  }
+});
+
+// Get document hierarchy for a vault
+router.get('/documents/:vaultId', async (req, res) => {
+  try {
+    const { vaultId } = req.params;
+
+    const syncService = new DocumentSyncService();
+    const hierarchy = await syncService.getDocumentHierarchy(vaultId);
+
+    res.json({
+      success: true,
+      data: hierarchy
+    });
+  } catch (error) {
+    logger.error('Error fetching document hierarchy:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch document hierarchy'
+    });
+  }
+});
+
+// Get unprocessed documents for a vault
+router.get('/unprocessed/:vaultId', async (req, res) => {
+  try {
+    const { vaultId } = req.params;
+
+    const syncService = new DocumentSyncService();
+    const unprocessed = await syncService.getUnprocessedDocuments(vaultId);
+
+    res.json({
+      success: true,
+      data: unprocessed
+    });
+  } catch (error) {
+    logger.error('Error fetching unprocessed documents:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch unprocessed documents'
+    });
+  }
+});
+
+/**
+ * Perform document sync asynchronously
+ * @param {number} vaultId - Vault ID
+ * @param {number} syncId - Sync history ID
+ * @param {string} vaultName - Vault name for logging
+ */
+async function performDocumentSync(vaultId, syncId, vaultName) {
+  const syncService = new DocumentSyncService();
+  
+  try {
+    // Sync document structure from reMarkable
+    const syncStats = await syncService.syncDocumentStructure(vaultId);
+
+    // Update sync history with success
+    await runQuery(`
+      UPDATE sync_history 
+      SET status = 'success', 
+          notes_synced = ?, 
+          errors_count = ?,
+          completed_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `, [syncStats.new + syncStats.updated, syncStats.errors, syncId]);
+
+    // Update vault last sync time
+    await runQuery(`
+      UPDATE vaults 
+      SET last_sync = CURRENT_TIMESTAMP 
+      WHERE id = ?
+    `, [vaultId]);
+
+    logger.sync(`Document sync completed for vault: ${vaultName}`, { 
+      vaultId, 
+      syncId,
+      stats: syncStats
+    });
+
+  } catch (error) {
+    logger.error(`Document sync failed for vault: ${vaultName}`, error);
+
+    // Update sync history with error
+    await runQuery(`
+      UPDATE sync_history 
+      SET status = 'error', 
+          error_message = ?,
+          completed_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `, [error.message, syncId]);
+  }
+}
 
 module.exports = router;

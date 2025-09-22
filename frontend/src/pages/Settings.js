@@ -1,6 +1,7 @@
 import React from 'react';
 import styled from 'styled-components';
 import { FiSettings } from 'react-icons/fi';
+import RemarkableSettings from '../components/RemarkableSettings';
 
 const SettingsContainer = styled.div`
   max-width: 1200px;
@@ -69,15 +70,7 @@ const Settings = () => {
         </PageSubtitle>
       </PageHeader>
 
-      <EmptyState>
-        <EmptyStateIcon>
-          <FiSettings />
-        </EmptyStateIcon>
-        <EmptyStateTitle>Settings Panel</EmptyStateTitle>
-        <EmptyStateText>
-          Configure your reMarkable token, sync schedules, and notification preferences.
-        </EmptyStateText>
-      </EmptyState>
+      <RemarkableSettings />
     </SettingsContainer>
   );
 };
