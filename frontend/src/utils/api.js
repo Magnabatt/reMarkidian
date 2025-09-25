@@ -87,6 +87,14 @@ export const settingsAPI = {
   update: (key, value) => api.put(`/settings/${key}`, { value }),
   updateMultiple: (settings) => api.put('/settings', { settings }),
   reset: (key) => api.post(`/settings/${key}/reset`),
+  
+  // reMarkable Integration endpoints
+  remarkable: {
+    connect: (oneTimeCode) => api.post('/settings/remarkable/connect', { oneTimeCode }),
+    getStatus: () => api.get('/settings/remarkable/status'),
+    refresh: () => api.post('/settings/remarkable/refresh'),
+    disconnect: () => api.delete('/settings/remarkable/disconnect'),
+  },
 };
 
 // Helper functions

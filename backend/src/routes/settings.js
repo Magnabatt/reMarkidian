@@ -1,6 +1,7 @@
 const express = require('express');
 const { runQuery, getQuery, getAllQuery } = require('../config/database');
 const logger = require('../utils/logger');
+const AppLogger = require('../services/appLogger');
 const RemarkableConnectionService = require('../services/remarkableConnection');
 
 const router = express.Router();
@@ -287,38 +288,69 @@ router.post('/:key/reset', async (req, res) => {
 
 // reMarkable Integration Endpoints
 
-// Connect to reMarkable with one-time code
+// Register device with reMarkable using one-time code
 router.post('/remarkable/connect', async (req, res) => {
   try {
+    // Add detailed logging for debugging
+    await AppLogger.info('auth', 'reMarkable device registration request received', {
+      body: req.body,
+      headers: req.headers,
+      contentType: req.get('Content-Type')
+    });
+
     const { oneTimeCode } = req.body;
 
+    // More detailed validation logging
     if (!oneTimeCode) {
+      await AppLogger.warn('auth', 'reMarkable registration failed: missing oneTimeCode', {
+        receivedBody: req.body,
+        oneTimeCodeValue: oneTimeCode,
+        oneTimeCodeType: typeof oneTimeCode
+      });
       return res.status(400).json({
         success: false,
-        message: 'One-time code is required'
+        message: 'One-time code is required',
+        debug: {
+          receivedFields: Object.keys(req.body || {}),
+          oneTimeCodeValue: oneTimeCode
+        }
       });
     }
+
+    await AppLogger.info('auth', 'Attempting reMarkable device registration', { 
+      oneTimeCode: oneTimeCode.substring(0, 2) + '***' 
+    });
 
     const connectionService = new RemarkableConnectionService();
     const result = await connectionService.connect(oneTimeCode);
 
     if (result.success) {
-      logger.info('reMarkable connection established via Settings API');
+      await AppLogger.info('auth', 'reMarkable device registered successfully via Settings API', {
+        deviceId: result.deviceId,
+        registeredAt: result.registeredAt
+      });
       res.json(result);
     } else {
+      await AppLogger.error('auth', 'reMarkable device registration failed', { 
+        error: result.message,
+        oneTimeCode: oneTimeCode.substring(0, 2) + '***'
+      });
       res.status(400).json(result);
     }
   } catch (error) {
-    logger.error('Error connecting to reMarkable:', error);
+    await AppLogger.error('auth', 'Error registering device with reMarkable', {
+      error: error.message,
+      stack: error.stack
+    });
     res.status(500).json({
       success: false,
-      message: 'Failed to connect to reMarkable Cloud',
+      message: 'Failed to register device with reMarkable Cloud',
       error: error.message
     });
   }
 });
 
-// Get reMarkable connection status
+// Get reMarkable device registration status
 router.get('/remarkable/status', async (req, res) => {
   try {
     const connectionService = new RemarkableConnectionService();
@@ -329,60 +361,54 @@ router.get('/remarkable/status', async (req, res) => {
       data: status
     });
   } catch (error) {
-    logger.error('Error getting reMarkable status:', error);
+    logger.error('Error getting reMarkable device status:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to get connection status',
+      message: 'Failed to get device registration status',
       error: error.message
     });
   }
 });
 
-// Test reMarkable connection
-router.post('/remarkable/test', async (req, res) => {
+// Refresh device token
+router.post('/remarkable/refresh', async (req, res) => {
   try {
     const connectionService = new RemarkableConnectionService();
-    const testResult = await connectionService.testConnection();
+    const result = await connectionService.refreshToken();
 
-    if (testResult.success) {
-      res.json({
-        success: true,
-        data: testResult
-      });
+    if (result.success) {
+      logger.info('reMarkable device token refreshed via Settings API');
+      res.json(result);
     } else {
-      res.status(400).json({
-        success: false,
-        message: testResult.message,
-        data: testResult
-      });
+      res.status(400).json(result);
     }
   } catch (error) {
-    logger.error('Error testing reMarkable connection:', error);
+    logger.error('Error refreshing reMarkable device token:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to test connection',
+      message: 'Failed to refresh device token',
       error: error.message
     });
   }
 });
 
-// Disconnect from reMarkable
+// Clear device registration (disconnect locally)
 router.delete('/remarkable/disconnect', async (req, res) => {
   try {
     const connectionService = new RemarkableConnectionService();
     const result = await connectionService.disconnect();
 
     if (result.success) {
-      logger.info('reMarkable disconnected via Settings API');
+      logger.info('reMarkable device registration cleared via Settings API');
       res.json(result);
     } else {
       res.status(400).json(result);
     }
   } catch (error) {
-    logger.error('Error disconnecting from reMarkable:', error);
+    logger.error('Error clearing reMarkable device registration:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to disconnect from reMarkable Cloud',
+      message: 'Failed to clear device registration',
       error: error.message
     });
   }

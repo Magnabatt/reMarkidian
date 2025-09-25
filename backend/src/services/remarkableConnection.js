@@ -15,57 +15,49 @@ class RemarkableConnectionService {
    */
   async connect(oneTimeCode) {
     try {
-      logger.info('Attempting reMarkable connection with one-time code');
+      logger.info('Attempting reMarkable device registration with one-time code');
 
       // Validate one-time code format
       if (!this.validateOneTimeCode(oneTimeCode)) {
         throw new Error('Invalid one-time code format');
       }
 
-      // Initialize API client with the one-time code
-      await this.apiClient.initialize(oneTimeCode);
+      // Ensure device ID is set
+      await this.apiClient.getDeviceId();
 
-      // Get device and user tokens
-      const deviceToken = this.apiClient.deviceToken;
-      const userToken = await this.apiClient.getUserToken();
+      // Register device with the one-time code
+      const registrationResult = await this.apiClient.registerDevice(oneTimeCode);
 
-      if (!deviceToken || !userToken) {
-        throw new Error('Failed to obtain authentication tokens');
+      if (!registrationResult.deviceToken) {
+        throw new Error('Failed to obtain device token');
       }
 
-      // Encrypt tokens before storing
-      const encryptedDeviceToken = tokenSecurity.encrypt(deviceToken);
-      const encryptedUserToken = tokenSecurity.encrypt(userToken);
+      // Encrypt device token before storing
+      const encryptedDeviceToken = tokenSecurity.encrypt(registrationResult.deviceToken);
 
-      // Store encrypted tokens in database
-      await this.storeTokens(encryptedDeviceToken, encryptedUserToken);
+      // Store encrypted device token in database
+      await this.storeDeviceToken(encryptedDeviceToken);
 
-      // Test the connection
-      const connectionTest = await this.testConnection();
-      
-      if (!connectionTest.success) {
-        throw new Error('Connection test failed after token storage');
-      }
-
-      logger.info('reMarkable connection established successfully');
+      logger.info('reMarkable device registered successfully');
 
       return {
         success: true,
-        message: 'Successfully connected to reMarkable Cloud',
-        connectionStatus: 'connected',
-        deviceId: this.apiClient.deviceId,
-        testResult: connectionTest
+        message: 'Successfully registered device with reMarkable Cloud',
+        connectionStatus: 'registered',
+        deviceId: registrationResult.deviceId,
+        registeredAt: registrationResult.registeredAt,
+        deviceDesc: registrationResult.deviceDesc
       };
 
     } catch (error) {
-      logger.error('reMarkable connection failed:', error);
+      logger.error('reMarkable device registration failed:', error);
       
       // Clean up any partial tokens on failure
       await this.disconnect();
 
       return {
         success: false,
-        message: error.message || 'Failed to connect to reMarkable Cloud',
+        message: error.message || 'Failed to register device with reMarkable Cloud',
         connectionStatus: 'disconnected',
         error: error.message
       };
@@ -73,189 +65,169 @@ class RemarkableConnectionService {
   }
 
   /**
-   * Test current reMarkable connection
-   * @returns {Object} - Test result
+   * Refresh the stored device token
+   * @returns {Object} - Refresh result
    */
-  async testConnection() {
+  async refreshToken() {
     try {
-      logger.info('Testing reMarkable connection');
+      logger.info('Attempting to refresh device token');
 
-      // Get stored tokens
-      const tokens = await this.getStoredTokens();
-      if (!tokens.deviceToken || !tokens.userToken) {
-        return {
-          success: false,
-          message: 'No stored tokens found',
-          connectionStatus: 'disconnected'
-        };
+      // Get current stored token
+      const currentToken = await this.getStoredDeviceToken();
+      if (!currentToken) {
+        throw new Error('No device token found to refresh');
       }
 
-      // Initialize API client with stored tokens
-      this.apiClient.deviceToken = tokens.deviceToken;
-      this.apiClient.userToken = tokens.userToken;
+      // Refresh the token using the API client
+      const newToken = await this.apiClient.refreshToken(currentToken);
 
-      // Test by fetching document list
-      const documents = await this.apiClient.listDocuments();
-      
-      logger.info(`Connection test successful - found ${documents.length} documents`);
+      if (!newToken) {
+        throw new Error('Failed to obtain refreshed token');
+      }
+
+      // Encrypt and store the new token
+      const encryptedNewToken = tokenSecurity.encrypt(newToken);
+      await this.storeDeviceToken(encryptedNewToken);
+
+      logger.info('Device token refreshed and stored successfully');
 
       return {
         success: true,
-        message: 'Connection test successful',
-        connectionStatus: 'connected',
-        documentCount: documents.length,
-        lastTested: new Date().toISOString()
+        message: 'Device token refreshed successfully',
+        oldToken: currentToken.substring(0, 8) + '...' + currentToken.substring(currentToken.length - 8),
+        newToken: newToken.substring(0, 8) + '...' + newToken.substring(newToken.length - 8),
+        refreshedAt: new Date().toISOString()
       };
 
     } catch (error) {
-      logger.error('Connection test failed:', error);
-
+      logger.error('Device token refresh failed:', error);
+      
       return {
         success: false,
-        message: error.message || 'Connection test failed',
-        connectionStatus: 'error',
+        message: error.message || 'Failed to refresh device token',
         error: error.message
       };
     }
   }
 
   /**
-   * Get current connection status
-   * @returns {Object} - Connection status
+   * Get current device registration status
+   * @returns {Object} - Registration status
    */
   async getConnectionStatus() {
     try {
-      const tokens = await this.getStoredTokens();
+      const deviceToken = await this.getStoredDeviceToken();
       
-      if (!tokens.deviceToken || !tokens.userToken) {
+      if (!deviceToken) {
         return {
           connectionStatus: 'disconnected',
-          message: 'No reMarkable tokens configured',
-          hasTokens: false
+          message: 'No reMarkable device registered',
+          hasDeviceToken: false
         };
       }
 
-      // Get last sync information
-      const lastSync = await getQuery(`
-        SELECT MAX(completed_at) as last_sync_time, 
-               COUNT(*) as total_syncs,
-               SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as successful_syncs
-        FROM sync_history
+      // Get device ID from database
+      const deviceIdSetting = await getQuery(`
+        SELECT value FROM settings WHERE key = 'remarkable_device_id'
       `);
 
       return {
-        connectionStatus: 'connected',
-        message: 'reMarkable tokens configured',
-        hasTokens: true,
-        lastSync: lastSync?.last_sync_time || null,
-        totalSyncs: lastSync?.total_syncs || 0,
-        successfulSyncs: lastSync?.successful_syncs || 0
+        connectionStatus: 'registered',
+        message: 'Device registered with reMarkable Cloud',
+        hasDeviceToken: true,
+        deviceId: deviceIdSetting?.value || null,
+        deviceToken: deviceToken.substring(0, 8) + '...' + deviceToken.substring(deviceToken.length - 8) // Show partial token for testing
       };
 
     } catch (error) {
-      logger.error('Error getting connection status:', error);
+      logger.error('Error getting device registration status:', error);
       
       return {
         connectionStatus: 'error',
-        message: 'Error checking connection status',
-        hasTokens: false,
+        message: 'Error checking device registration status',
+        hasDeviceToken: false,
         error: error.message
       };
     }
   }
 
   /**
-   * Disconnect from reMarkable (clear tokens)
+   * Disconnect from reMarkable (clear device token)
    * @returns {Object} - Disconnect result
    */
   async disconnect() {
     try {
-      logger.info('Disconnecting from reMarkable');
+      logger.info('Clearing reMarkable device registration');
 
-      // Clear tokens from database
+      // Clear device token from database
       await runQuery(`
         UPDATE settings 
         SET value = '', updated_at = CURRENT_TIMESTAMP
-        WHERE key IN ('remarkable_device_token', 'remarkable_user_token')
+        WHERE key = 'remarkable_device_token'
       `);
 
       // Clear API client tokens
       this.apiClient.deviceToken = null;
-      this.apiClient.userToken = null;
       this.apiClient.deviceId = null;
 
-      logger.info('Successfully disconnected from reMarkable');
+      logger.info('Successfully cleared device registration');
 
       return {
         success: true,
-        message: 'Successfully disconnected from reMarkable Cloud',
+        message: 'Device registration cleared locally. To remove the device from your reMarkable account, visit https://my.remarkable.com/device/',
         connectionStatus: 'disconnected'
       };
 
     } catch (error) {
-      logger.error('Error disconnecting from reMarkable:', error);
+      logger.error('Error clearing device registration:', error);
       
       return {
         success: false,
-        message: 'Error disconnecting from reMarkable Cloud',
+        message: 'Error clearing device registration',
         error: error.message
       };
     }
   }
 
   /**
-   * Store encrypted tokens in database
+   * Store encrypted device token in database
    * @param {string} encryptedDeviceToken - Encrypted device token
-   * @param {string} encryptedUserToken - Encrypted user token
    */
-  async storeTokens(encryptedDeviceToken, encryptedUserToken) {
-    // Store device token
+  async storeDeviceToken(encryptedDeviceToken) {
     await runQuery(`
       INSERT OR REPLACE INTO settings (key, value, type, description, updated_at)
       VALUES ('remarkable_device_token', ?, 'string', 'Encrypted reMarkable device token', CURRENT_TIMESTAMP)
     `, [encryptedDeviceToken]);
 
-    // Store user token
-    await runQuery(`
-      INSERT OR REPLACE INTO settings (key, value, type, description, updated_at)
-      VALUES ('remarkable_user_token', ?, 'string', 'Encrypted reMarkable user token', CURRENT_TIMESTAMP)
-    `, [encryptedUserToken]);
-
-    // Update the legacy remarkable_token setting to indicate tokens are stored
+    // Update the legacy remarkable_token setting to indicate device is registered
     await runQuery(`
       UPDATE settings 
-      SET value = 'configured', updated_at = CURRENT_TIMESTAMP
+      SET value = 'registered', updated_at = CURRENT_TIMESTAMP
       WHERE key = 'remarkable_token'
     `);
   }
 
   /**
-   * Get and decrypt stored tokens
-   * @returns {Object} - Decrypted tokens
+   * Get and decrypt stored device token
+   * @returns {string|null} - Decrypted device token
    */
-  async getStoredTokens() {
+  async getStoredDeviceToken() {
     try {
       const deviceTokenSetting = await getQuery(`
         SELECT value FROM settings WHERE key = 'remarkable_device_token'
       `);
 
-      const userTokenSetting = await getQuery(`
-        SELECT value FROM settings WHERE key = 'remarkable_user_token'
-      `);
-
-      if (!deviceTokenSetting?.value || !userTokenSetting?.value) {
-        return { deviceToken: null, userToken: null };
+      if (!deviceTokenSetting?.value) {
+        return null;
       }
 
-      // Decrypt tokens
+      // Decrypt token
       const deviceToken = tokenSecurity.decrypt(deviceTokenSetting.value);
-      const userToken = tokenSecurity.decrypt(userTokenSetting.value);
-
-      return { deviceToken, userToken };
+      return deviceToken;
 
     } catch (error) {
-      logger.error('Error retrieving stored tokens:', error);
-      return { deviceToken: null, userToken: null };
+      logger.error('Error retrieving stored device token:', error);
+      return null;
     }
   }
 
@@ -286,27 +258,6 @@ class RemarkableConnectionService {
     return this.apiClient;
   }
 
-  /**
-   * Initialize API client with stored tokens
-   * @returns {boolean} - True if successfully initialized
-   */
-  async initializeWithStoredTokens() {
-    try {
-      const tokens = await this.getStoredTokens();
-      
-      if (!tokens.deviceToken || !tokens.userToken) {
-        return false;
-      }
-
-      this.apiClient.deviceToken = tokens.deviceToken;
-      this.apiClient.userToken = tokens.userToken;
-
-      return true;
-    } catch (error) {
-      logger.error('Error initializing API client with stored tokens:', error);
-      return false;
-    }
-  }
 }
 
 module.exports = RemarkableConnectionService;

@@ -107,6 +107,17 @@ const createTables = async () => {
       message TEXT NOT NULL,
       read BOOLEAN DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`,
+
+    // Application logs table
+    `CREATE TABLE IF NOT EXISTS app_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      level TEXT NOT NULL, -- 'error', 'warn', 'info', 'debug'
+      category TEXT NOT NULL, -- 'sync', 'auth', 'api', 'system'
+      message TEXT NOT NULL,
+      metadata TEXT, -- JSON string for additional data
+      source TEXT DEFAULT 'backend', -- 'backend', 'frontend'
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`
   ];
 
@@ -130,6 +141,7 @@ const insertDefaultSettings = async () => {
     { key: 'ai_summarization', value: 'false', type: 'boolean', description: 'Enable AI summarization of notes' },
     { key: 'github_sync_mode', value: 'direct', type: 'string', description: 'GitHub sync mode (direct, pr, branch)' },
     { key: 'remarkable_token', value: '', type: 'string', description: 'reMarkable Cloud API token' },
+    { key: 'remarkable_device_id', value: '', type: 'string', description: 'Persistent reMarkable device ID' },
     { key: 'app_version', value: '1.0.0', type: 'string', description: 'Application version' }
   ];
 

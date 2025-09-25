@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
 import { FiWifi, FiWifiOff, FiCheck, FiX, FiLoader, FiAlertCircle } from 'react-icons/fi';
-import api from '../utils/api';
+import api, { settingsAPI } from '../utils/api';
 
 const SettingsSection = styled.div`
   background-color: ${({ theme }) => theme.colors.backgroundSecondary};
@@ -29,7 +29,7 @@ const ConnectionStatus = styled.div`
   margin-bottom: ${({ theme }) => theme.spacing.lg};
   background-color: ${({ theme, status }) => {
     switch (status) {
-      case 'connected': return theme.colors.success + '20';
+      case 'registered': return theme.colors.success + '20';
       case 'disconnected': return theme.colors.backgroundTertiary;
       case 'error': return theme.colors.error + '20';
       default: return theme.colors.backgroundTertiary;
@@ -37,7 +37,7 @@ const ConnectionStatus = styled.div`
   }};
   border: 1px solid ${({ theme, status }) => {
     switch (status) {
-      case 'connected': return theme.colors.success + '40';
+      case 'registered': return theme.colors.success + '40';
       case 'disconnected': return theme.colors.border;
       case 'error': return theme.colors.error + '40';
       default: return theme.colors.border;
@@ -48,7 +48,7 @@ const ConnectionStatus = styled.div`
 const StatusIcon = styled.div`
   color: ${({ theme, status }) => {
     switch (status) {
-      case 'connected': return theme.colors.success;
+      case 'registered': return theme.colors.success;
       case 'disconnected': return theme.colors.textMuted;
       case 'error': return theme.colors.error;
       default: return theme.colors.textMuted;
@@ -193,84 +193,115 @@ const ErrorMessage = styled.div`
   gap: ${({ theme }) => theme.spacing.sm};
 `;
 
+const SuccessMessage = styled.div`
+  background-color: ${({ theme }) => theme.colors.success}20;
+  border: 1px solid ${({ theme }) => theme.colors.success}40;
+  border-radius: ${({ theme }) => theme.borderRadius.md};
+  padding: ${({ theme }) => theme.spacing.md};
+  color: ${({ theme }) => theme.colors.success};
+  margin-top: ${({ theme }) => theme.spacing.sm};
+  display: flex;
+  align-items: center;
+  gap: ${({ theme }) => theme.spacing.sm};
+`;
+
+const TokenDisplay = styled.div`
+  background-color: ${({ theme }) => theme.colors.backgroundTertiary};
+  border-radius: ${({ theme }) => theme.borderRadius.md};
+  padding: ${({ theme }) => theme.spacing.md};
+  margin-bottom: ${({ theme }) => theme.spacing.lg};
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: ${({ theme }) => theme.fontSizes.sm};
+  color: ${({ theme }) => theme.colors.textSecondary};
+  word-break: break-all;
+`;
+
+const TokenLabel = styled.div`
+  font-weight: ${({ theme }) => theme.fontWeights.medium};
+  color: ${({ theme }) => theme.colors.text};
+  margin-bottom: ${({ theme }) => theme.spacing.xs};
+  font-family: inherit;
+`;
+
 const RemarkableSettings = () => {
-  const [connectionStatus, setConnectionStatus] = useState(null);
+  const [registrationStatus, setRegistrationStatus] = useState(null);
   const [oneTimeCode, setOneTimeCode] = useState('');
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [isTesting, setIsTesting] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [refreshResult, setRefreshResult] = useState(null);
 
   useEffect(() => {
-    fetchConnectionStatus();
+    fetchRegistrationStatus();
   }, []);
 
-  const fetchConnectionStatus = async () => {
+  const fetchRegistrationStatus = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/settings/remarkable/status');
-      setConnectionStatus(response.data.data);
+      const response = await settingsAPI.remarkable.getStatus();
+      setRegistrationStatus(response.data.data);
       setError('');
     } catch (err) {
-      console.error('Error fetching connection status:', err);
-      setError('Failed to fetch connection status');
+      console.error('Error fetching registration status:', err);
+      setError('Failed to fetch registration status');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleConnect = async (e) => {
+  const handleRegister = async (e) => {
     e.preventDefault();
     if (!oneTimeCode.trim()) {
       setError('Please enter a one-time code');
       return;
     }
 
-    setIsConnecting(true);
+    setIsRegistering(true);
     setError('');
 
     try {
-      const response = await api.post('/settings/remarkable/connect', {
-        oneTimeCode: oneTimeCode.trim()
-      });
+      const response = await settingsAPI.remarkable.connect(oneTimeCode.trim());
 
       if (response.data.success) {
         setOneTimeCode('');
-        await fetchConnectionStatus();
+        await fetchRegistrationStatus();
       } else {
-        setError(response.data.message || 'Failed to connect');
+        setError(response.data.message || 'Failed to register device');
       }
     } catch (err) {
-      console.error('Connection error:', err);
-      setError(err.response?.data?.message || 'Failed to connect to reMarkable Cloud');
+      console.error('Registration error:', err);
+      setError(err.response?.data?.message || 'Failed to register device with reMarkable Cloud');
     } finally {
-      setIsConnecting(false);
+      setIsRegistering(false);
     }
   };
 
-  const handleTestConnection = async () => {
-    setIsTesting(true);
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
     setError('');
+    setRefreshResult(null);
 
     try {
-      const response = await api.post('/settings/remarkable/test');
+      const response = await settingsAPI.remarkable.refresh();
       
       if (response.data.success) {
-        await fetchConnectionStatus();
+        setRefreshResult(response.data);
+        await fetchRegistrationStatus();
       } else {
-        setError(response.data.message || 'Connection test failed');
+        setError(response.data.message || 'Failed to refresh token');
       }
     } catch (err) {
-      console.error('Test error:', err);
-      setError(err.response?.data?.message || 'Connection test failed');
+      console.error('Refresh error:', err);
+      setError(err.response?.data?.message || 'Failed to refresh token');
     } finally {
-      setIsTesting(false);
+      setIsRefreshing(false);
     }
   };
 
   const handleDisconnect = async () => {
-    if (!window.confirm('Are you sure you want to disconnect from reMarkable Cloud? This will remove all stored tokens.')) {
+    if (!window.confirm('Are you sure you want to clear the device registration? This will only remove the local token. To fully remove the device from your reMarkable account, you must visit the reMarkable Device Management Portal.')) {
       return;
     }
 
@@ -278,16 +309,17 @@ const RemarkableSettings = () => {
     setError('');
 
     try {
-      const response = await api.delete('/settings/remarkable/disconnect');
+      const response = await settingsAPI.remarkable.disconnect();
       
       if (response.data.success) {
-        await fetchConnectionStatus();
+        setRefreshResult(null);
+        await fetchRegistrationStatus();
       } else {
-        setError(response.data.message || 'Failed to disconnect');
+        setError(response.data.message || 'Failed to clear registration');
       }
     } catch (err) {
       console.error('Disconnect error:', err);
-      setError(err.response?.data?.message || 'Failed to disconnect');
+      setError(err.response?.data?.message || 'Failed to clear registration');
     } finally {
       setIsDisconnecting(false);
     }
@@ -296,33 +328,32 @@ const RemarkableSettings = () => {
   const getStatusIcon = () => {
     if (loading) return <FiLoader className="animate-spin" />;
     
-    switch (connectionStatus?.connectionStatus) {
-      case 'connected': return <FiWifi />;
+    switch (registrationStatus?.connectionStatus) {
+      case 'registered': return <FiWifi />;
       case 'error': return <FiAlertCircle />;
       default: return <FiWifiOff />;
     }
   };
 
   const getStatusTitle = () => {
-    if (loading) return 'Checking connection...';
+    if (loading) return 'Checking registration...';
     
-    switch (connectionStatus?.connectionStatus) {
-      case 'connected': return 'Connected to reMarkable Cloud';
-      case 'error': return 'Connection Error';
-      default: return 'Not Connected';
+    switch (registrationStatus?.connectionStatus) {
+      case 'registered': return 'Device Registered';
+      case 'error': return 'Registration Error';
+      default: return 'Device Not Registered';
     }
   };
 
   const getStatusSubtitle = () => {
     if (loading) return 'Please wait...';
     
-    if (connectionStatus?.connectionStatus === 'connected') {
-      const { totalSyncs, successfulSyncs, lastSync } = connectionStatus;
-      const lastSyncText = lastSync ? new Date(lastSync).toLocaleString() : 'Never';
-      return `${successfulSyncs}/${totalSyncs} successful syncs • Last sync: ${lastSyncText}`;
+    if (registrationStatus?.connectionStatus === 'registered') {
+      const deviceId = registrationStatus.deviceId;
+      return deviceId ? `Device ID: ${deviceId}` : 'Device registered with reMarkable Cloud';
     }
     
-    return connectionStatus?.message || 'Configure your reMarkable Cloud connection';
+    return registrationStatus?.message || 'Register your device to connect with reMarkable Cloud';
   };
 
   return (
@@ -332,8 +363,8 @@ const RemarkableSettings = () => {
         reMarkable Integration
       </SectionTitle>
 
-      <ConnectionStatus status={connectionStatus?.connectionStatus}>
-        <StatusIcon status={connectionStatus?.connectionStatus}>
+      <ConnectionStatus status={registrationStatus?.connectionStatus}>
+        <StatusIcon status={registrationStatus?.connectionStatus}>
           {getStatusIcon()}
         </StatusIcon>
         <StatusText>
@@ -342,21 +373,21 @@ const RemarkableSettings = () => {
         </StatusText>
       </ConnectionStatus>
 
-      {connectionStatus?.connectionStatus !== 'connected' && (
+      {registrationStatus?.connectionStatus !== 'registered' && (
         <>
           <Instructions>
-            <InstructionsTitle>How to Connect</InstructionsTitle>
+            <InstructionsTitle>How to Register Device</InstructionsTitle>
             <InstructionsList>
-              <li>Open the reMarkable mobile app or go to <strong>my.remarkable.com</strong></li>
+              <li>Open the reMarkable mobile app or go to <strong><a href="https://my.remarkable.com/#desktop" target="_blank" rel="noopener noreferrer" style={{color: 'inherit', textDecoration: 'underline'}}>my.remarkable.com/#desktop</a></strong></li>
               <li>Navigate to <strong>Settings → Connect/Sync</strong></li>
               <li>Select <strong>Connect to third-party app</strong></li>
               <li>Copy the 8-character one-time code</li>
-              <li>Paste the code below and click Connect</li>
+              <li>Paste the code below and click Register</li>
             </InstructionsList>
           </Instructions>
 
           <SetupForm>
-            <form onSubmit={handleConnect}>
+            <form onSubmit={handleRegister}>
               <FormGroup>
                 <Label htmlFor="oneTimeCode">One-Time Code</Label>
                 <Input
@@ -366,31 +397,56 @@ const RemarkableSettings = () => {
                   onChange={(e) => setOneTimeCode(e.target.value)}
                   placeholder="Enter 8-character code"
                   maxLength={8}
-                  disabled={isConnecting}
+                  disabled={isRegistering}
                 />
               </FormGroup>
               
-              <PrimaryButton type="submit" disabled={isConnecting || !oneTimeCode.trim()}>
-                {isConnecting ? <FiLoader className="animate-spin" /> : <FiCheck />}
-                {isConnecting ? 'Connecting...' : 'Connect'}
+              <PrimaryButton type="submit" disabled={isRegistering || !oneTimeCode.trim()}>
+                {isRegistering ? <FiLoader className="animate-spin" /> : <FiCheck />}
+                {isRegistering ? 'Registering...' : 'Register Device'}
               </PrimaryButton>
             </form>
           </SetupForm>
         </>
       )}
 
-      {connectionStatus?.connectionStatus === 'connected' && (
-        <ButtonGroup>
-          <SecondaryButton onClick={handleTestConnection} disabled={isTesting}>
-            {isTesting ? <FiLoader className="animate-spin" /> : <FiCheck />}
-            {isTesting ? 'Testing...' : 'Test Connection'}
-          </SecondaryButton>
-          
-          <DangerButton onClick={handleDisconnect} disabled={isDisconnecting}>
-            {isDisconnecting ? <FiLoader className="animate-spin" /> : <FiX />}
-            {isDisconnecting ? 'Disconnecting...' : 'Disconnect'}
-          </DangerButton>
-        </ButtonGroup>
+      {registrationStatus?.connectionStatus === 'registered' && (
+        <>
+          {registrationStatus.deviceToken && (
+            <TokenDisplay>
+              <TokenLabel>Device Token (for testing):</TokenLabel>
+              {registrationStatus.deviceToken}
+            </TokenDisplay>
+          )}
+
+          <Instructions>
+            <InstructionsTitle>Device Management</InstructionsTitle>
+            <InstructionsList>
+              <li>Your device is registered with reMarkable Cloud</li>
+              <li>To remove this device from your reMarkable account, visit the <strong><a href="https://my.remarkable.com/device/" target="_blank" rel="noopener noreferrer" style={{color: 'inherit', textDecoration: 'underline'}}>reMarkable Device Management Portal</a></strong></li>
+              <li>The "Clear Registration" button below only removes the local token from reMarkidian</li>
+            </InstructionsList>
+          </Instructions>
+
+          <ButtonGroup>
+            <SecondaryButton onClick={handleRefresh} disabled={isRefreshing}>
+              {isRefreshing ? <FiLoader className="animate-spin" /> : <FiCheck />}
+              {isRefreshing ? 'Refreshing...' : 'Refresh Token'}
+            </SecondaryButton>
+            
+            <DangerButton onClick={handleDisconnect} disabled={isDisconnecting}>
+              {isDisconnecting ? <FiLoader className="animate-spin" /> : <FiX />}
+              {isDisconnecting ? 'Clearing...' : 'Clear Registration'}
+            </DangerButton>
+          </ButtonGroup>
+
+          {refreshResult && (
+            <SuccessMessage>
+              <FiCheck />
+              Token refreshed successfully! Old: {refreshResult.oldToken} → New: {refreshResult.newToken}
+            </SuccessMessage>
+          )}
+        </>
       )}
 
       {error && (

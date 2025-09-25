@@ -1,58 +1,85 @@
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
+const { getQuery, runQuery } = require('../config/database');
 const logger = require('../utils/logger');
 
 class RemarkableApiClient {
   constructor() {
-    this.baseUrl = 'https://document-storage-production-dot-remarkable-cloud.appspot.com';
-    this.authUrl = 'https://webapp-production-dot-remarkable-cloud.appspot.com';
-    this.userToken = null;
+    this.deviceAuthUrl = 'https://webapp.cloud.remarkable.com';
     this.deviceToken = null;
     this.deviceId = null;
   }
 
   /**
-   * Initialize the API client with authentication
-   * @param {string} userToken - User authentication token
+   * Get or create persistent device ID
    */
-  async initialize(userToken) {
+  async getDeviceId() {
     try {
-      this.userToken = userToken;
+      // Try to get existing device ID from database
+      const setting = await getQuery('SELECT value FROM settings WHERE key = ?', ['remarkable_device_id']);
       
-      // Generate a unique device ID for this instance
+      if (setting && setting.value) {
+        this.deviceId = setting.value;
+        logger.info('Using existing device ID from database');
+        return this.deviceId;
+      }
+
+      // Generate new device ID and store it
       this.deviceId = uuidv4();
-      
-      // Register device and get device token
-      await this.registerDevice();
-      
-      logger.info('reMarkable API client initialized successfully');
-      return true;
+      await runQuery(`
+        INSERT OR REPLACE INTO settings (key, value, type, description, updated_at)
+        VALUES (?, ?, 'string', 'Persistent reMarkable device ID', CURRENT_TIMESTAMP)
+      `, ['remarkable_device_id', this.deviceId]);
+
+      logger.info('Generated and stored new device ID');
+      return this.deviceId;
     } catch (error) {
-      logger.error('Failed to initialize reMarkable API client:', error);
-      throw error;
+      logger.error('Failed to get/create device ID:', error);
+      // Fallback to temporary device ID
+      this.deviceId = uuidv4();
+      return this.deviceId;
     }
   }
 
   /**
-   * Register device with reMarkable Cloud
+   * Register device with reMarkable Cloud using one-time code
+   * @param {string} oneTimeCode - One-time code from reMarkable
    */
-  async registerDevice() {
+  async registerDevice(oneTimeCode) {
     try {
-      const response = await axios.post(`${this.authUrl}/token/json/2/device/new`, {
-        code: this.userToken,
-        deviceDesc: 'reMarkidian Sync Client',
+      // Ensure we have a device ID
+      if (!this.deviceId) {
+        await this.getDeviceId();
+      }
+
+      // Use the correct payload format as specified
+      const payload = {
+        code: oneTimeCode,
+        deviceDesc: 'desktop-windows',
         deviceID: this.deviceId
-      }, {
+      };
+
+      logger.info('Registering device with reMarkable Cloud', {
+        deviceID: this.deviceId,
+        deviceDesc: payload.deviceDesc,
+        codeLength: oneTimeCode.length
+      });
+
+      const response = await axios.post(`${this.deviceAuthUrl}/token/json/2/device/new`, payload, {
         headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'reMarkidian/1.0.0'
+          'Content-Type': 'application/json'
         }
       });
 
       this.deviceToken = response.data;
       logger.info('Device registered successfully with reMarkable Cloud');
       
-      return this.deviceToken;
+      return {
+        deviceToken: this.deviceToken,
+        deviceId: this.deviceId,
+        registeredAt: new Date().toISOString(),
+        deviceDesc: payload.deviceDesc
+      };
     } catch (error) {
       logger.error('Device registration failed:', error.response?.data || error.message);
       throw new Error(`Device registration failed: ${error.response?.data?.message || error.message}`);
@@ -60,204 +87,43 @@ class RemarkableApiClient {
   }
 
   /**
-   * Get user token for API access
+   * Refresh device token to get a new one
+   * @param {string} currentToken - Current device token to refresh
+   * @returns {string} - New refreshed token
    */
-  async getUserToken() {
+  async refreshToken(currentToken) {
     try {
-      if (!this.deviceToken) {
-        throw new Error('Device not registered. Call registerDevice() first.');
+      if (!currentToken) {
+        throw new Error('No token provided for refresh');
       }
 
-      const response = await axios.post(`${this.authUrl}/token/json/2/user/new`, {}, {
+      logger.info('Refreshing device token');
+
+      const response = await axios.post('https://my.remarkable.com/token/json/2/user/new', {}, {
         headers: {
-          'Authorization': `Bearer ${this.deviceToken}`,
-          'Content-Type': 'application/json',
-          'User-Agent': 'reMarkidian/1.0.0'
+          'Authorization': `Bearer ${currentToken}`,
+          'Content-Type': 'application/json'
         }
       });
 
-      const apiToken = response.data;
-      logger.info('User token obtained successfully');
+      const refreshedToken = response.data;
+      logger.info('Device token refreshed successfully');
       
-      return apiToken;
+      return refreshedToken;
     } catch (error) {
-      logger.error('Failed to get user token:', error.response?.data || error.message);
-      throw new Error(`Failed to get user token: ${error.response?.data?.message || error.message}`);
+      logger.error('Failed to refresh device token:', error.response?.data || error.message);
+      throw new Error(`Failed to refresh device token: ${error.response?.data?.message || error.message}`);
     }
   }
 
   /**
-   * List all documents and folders from reMarkable Cloud
-   */
-  async listDocuments() {
-    try {
-      const userToken = await this.getUserToken();
-      
-      const response = await axios.get(`${this.baseUrl}/document-storage/json/2/docs`, {
-        headers: {
-          'Authorization': `Bearer ${userToken}`,
-          'User-Agent': 'reMarkidian/1.0.0'
-        }
-      });
-
-      const documents = response.data;
-      logger.info(`Retrieved ${documents.length} documents from reMarkable Cloud`);
-      
-      return documents;
-    } catch (error) {
-      logger.error('Failed to list documents:', error.response?.data || error.message);
-      throw new Error(`Failed to list documents: ${error.response?.data?.message || error.message}`);
-    }
-  }
-
-  /**
-   * Get document metadata by ID
-   * @param {string} documentId - Document UUID
-   */
-  async getDocumentMetadata(documentId) {
-    try {
-      const userToken = await this.getUserToken();
-      
-      const response = await axios.get(`${this.baseUrl}/document-storage/json/2/docs/${documentId}`, {
-        headers: {
-          'Authorization': `Bearer ${userToken}`,
-          'User-Agent': 'reMarkidian/1.0.0'
-        }
-      });
-
-      return response.data;
-    } catch (error) {
-      logger.error(`Failed to get metadata for document ${documentId}:`, error.response?.data || error.message);
-      throw new Error(`Failed to get document metadata: ${error.response?.data?.message || error.message}`);
-    }
-  }
-
-  /**
-   * Download document files
-   * @param {string} documentId - Document UUID
-   * @param {string} fileType - File type to download (e.g., 'rm', 'pdf', 'epub')
-   */
-  async downloadDocument(documentId, fileType = 'rm') {
-    try {
-      const userToken = await this.getUserToken();
-      
-      // First, get the download URL
-      const urlResponse = await axios.get(`${this.baseUrl}/document-storage/json/2/docs/${documentId}/download-url`, {
-        headers: {
-          'Authorization': `Bearer ${userToken}`,
-          'User-Agent': 'reMarkidian/1.0.0'
-        }
-      });
-
-      const downloadUrl = urlResponse.data.url;
-      
-      // Download the actual file
-      const fileResponse = await axios.get(downloadUrl, {
-        responseType: 'arraybuffer',
-        headers: {
-          'User-Agent': 'reMarkidian/1.0.0'
-        }
-      });
-
-      logger.info(`Downloaded document ${documentId} (${fileType})`);
-      return fileResponse.data;
-    } catch (error) {
-      logger.error(`Failed to download document ${documentId}:`, error.response?.data || error.message);
-      throw new Error(`Failed to download document: ${error.response?.data?.message || error.message}`);
-    }
-  }
-
-  /**
-   * Parse document list into a structured format
-   * @param {Array} documents - Raw document list from API
-   */
-  parseDocuments(documents) {
-    const parsed = documents.map(doc => ({
-      id: doc.ID,
-      uuid: doc.ID,
-      name: doc.VissibleName || doc.ID,
-      type: doc.Type, // 'DocumentType' or 'CollectionType'
-      parent: doc.Parent || null,
-      version: doc.Version || 1,
-      lastModified: doc.ModifiedClient ? new Date(doc.ModifiedClient) : null,
-      isFolder: doc.Type === 'CollectionType',
-      fileType: this.getFileType(doc),
-      bookmarked: doc.Bookmarked || false,
-      currentPage: doc.CurrentPage || 0,
-      success: doc.Success || true
-    }));
-
-    // Build hierarchy
-    const hierarchy = this.buildHierarchy(parsed);
-    
-    logger.info(`Parsed ${parsed.length} documents into hierarchy`);
-    return { documents: parsed, hierarchy };
-  }
-
-  /**
-   * Determine file type from document metadata
-   * @param {Object} doc - Document metadata
-   */
-  getFileType(doc) {
-    if (doc.Type === 'CollectionType') {
-      return 'folder';
-    }
-    
-    // Check for file extension in the name
-    const name = doc.VissibleName || '';
-    if (name.endsWith('.pdf')) return 'pdf';
-    if (name.endsWith('.epub')) return 'epub';
-    
-    // Default to reMarkable format
-    return 'rm';
-  }
-
-  /**
-   * Build hierarchical structure from flat document list
-   * @param {Array} documents - Parsed documents
-   */
-  buildHierarchy(documents) {
-    const docMap = new Map();
-    const roots = [];
-
-    // Create a map for quick lookup
-    documents.forEach(doc => {
-      docMap.set(doc.id, { ...doc, children: [] });
-    });
-
-    // Build the hierarchy
-    documents.forEach(doc => {
-      const docNode = docMap.get(doc.id);
-      
-      if (doc.parent && docMap.has(doc.parent)) {
-        // Add to parent's children
-        const parent = docMap.get(doc.parent);
-        parent.children.push(docNode);
-      } else {
-        // Root level document
-        roots.push(docNode);
-      }
-    });
-
-    return roots;
-  }
-
-  /**
-   * Check if the API client is properly initialized
-   */
-  isInitialized() {
-    return this.userToken !== null;
-  }
-
-  /**
-   * Get API status and connection info
+   * Get device registration status
    */
   getStatus() {
     return {
-      initialized: this.isInitialized(),
       hasDeviceToken: this.deviceToken !== null,
       deviceId: this.deviceId,
-      baseUrl: this.baseUrl
+      registrationUrl: this.deviceAuthUrl
     };
   }
 }
